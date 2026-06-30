@@ -1,0 +1,11 @@
+{
+  "name": "1024b-root",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "node scripts/dev-all.js"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
