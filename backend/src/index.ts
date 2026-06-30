@@ -266,27 +266,109 @@ function validarManga(body: Record<string, unknown>, parcial = false) {
 }
 
 async function prepararBanco() {
-  await connection.execute(`
-    CREATE TABLE IF NOT EXISTS manga (
-      id INT PRIMARY KEY AUTO_INCREMENT,
-      titulo VARCHAR(180) NOT NULL,
-      autor VARCHAR(120) NOT NULL,
-      categoria VARCHAR(40) NOT NULL,
-      preco DECIMAL(10,2) NOT NULL,
-      estoque INT NOT NULL DEFAULT 0,
-      imagem_url TEXT,
-      descricao TEXT,
-      destaque BOOLEAN NOT NULL DEFAULT false,
-      data_criacao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      data_modificacao DATETIME NULL
-    )
-  `);
+  try {
+    await connection.execute('SELECT 1');
+  } catch (erro) {
+    console.warn('Banco MySQL indisponível. Pulando inicialização da tabela manga.', erro);
+    return;
+  }
+
+  const createTableSql = connection.isSqlite
+    ? `
+      CREATE TABLE IF NOT EXISTS manga (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        titulo VARCHAR(180) NOT NULL,
+        autor VARCHAR(120) NOT NULL,
+        categoria VARCHAR(40) NOT NULL,
+        preco DECIMAL(10,2) NOT NULL,
+        estoque INT NOT NULL DEFAULT 0,
+        imagem_url TEXT,
+        descricao TEXT,
+        destaque BOOLEAN NOT NULL DEFAULT false,
+        data_criacao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        data_modificacao DATETIME NULL
+      )
+    `
+    : `
+      CREATE TABLE IF NOT EXISTS manga (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        titulo VARCHAR(180) NOT NULL,
+        autor VARCHAR(120) NOT NULL,
+        categoria VARCHAR(40) NOT NULL,
+        preco DECIMAL(10,2) NOT NULL,
+        estoque INT NOT NULL DEFAULT 0,
+        imagem_url TEXT,
+        descricao TEXT,
+        destaque BOOLEAN NOT NULL DEFAULT false,
+        data_criacao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        data_modificacao DATETIME NULL
+      )
+    `;
+
+  await connection.execute(createTableSql);
+
+  const createClientesSql = connection.isSqlite
+    ? `
+      CREATE TABLE IF NOT EXISTS clientes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        nome TEXT NOT NULL,
+        cidade TEXT NOT NULL
+      )
+    `
+    : `
+      CREATE TABLE IF NOT EXISTS clientes (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        nome VARCHAR(120) NOT NULL,
+        cidade VARCHAR(120) NOT NULL
+      )
+    `;
+
+  const createPedidosSql = connection.isSqlite
+    ? `
+      CREATE TABLE IF NOT EXISTS pedidos (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id INTEGER NOT NULL,
+        numero_pedido TEXT NOT NULL UNIQUE,
+        total DECIMAL(10,2) NOT NULL,
+        data_pedido DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (cliente_id) REFERENCES clientes(id)
+      )
+    `
+    : `
+      CREATE TABLE IF NOT EXISTS pedidos (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        cliente_id INT NOT NULL,
+        numero_pedido VARCHAR(50) NOT NULL UNIQUE,
+        total DECIMAL(10,2) NOT NULL,
+        data_pedido DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (cliente_id) REFERENCES clientes(id)
+      )
+    `;
+
+  await connection.execute(createClientesSql);
+  await connection.execute(createPedidosSql);
 
   const [linhas] = await connection.execute<ITotal[]>(
     'SELECT COUNT(*) AS total FROM manga'
   );
 
   if (linhas[0]?.total !== 0) {
+    const [contagemClientes] = await connection.execute<ITotal[]>(
+      'SELECT COUNT(*) AS total FROM clientes'
+    );
+
+    if (contagemClientes[0]?.total === 0) {
+      await connection.execute(
+        'INSERT INTO clientes (nome, cidade) VALUES (?, ?), (?, ?), (?, ?)',
+        ['Ana Silva', 'São Paulo', 'Bruno Costa', 'Rio de Janeiro', 'Carla Mendes', 'Belo Horizonte']
+      );
+
+      await connection.execute(
+        'INSERT INTO pedidos (cliente_id, numero_pedido, total) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)',
+        [1, 'PED-1001', 89.9, 2, 'PED-1002', 129.8, 3, 'PED-1003', 59.9]
+      );
+    }
+
     return;
   }
 
@@ -307,10 +389,134 @@ async function prepararBanco() {
       ]
     );
   }
+
+  await connection.execute(
+    'INSERT INTO clientes (nome, cidade) VALUES (?, ?), (?, ?), (?, ?)',
+    ['Ana Silva', 'São Paulo', 'Bruno Costa', 'Rio de Janeiro', 'Carla Mendes', 'Belo Horizonte']
+  );
+
+  await connection.execute(
+    'INSERT INTO pedidos (cliente_id, numero_pedido, total) VALUES (?, ?, ?), (?, ?, ?), (?, ?, ?)',
+    [1, 'PED-1001', 89.9, 2, 'PED-1002', 129.8, 3, 'PED-1003', 59.9]
+  );
 }
 
 app.get('/health', (_req, res) => {
   return res.status(200).json({ mensagem: 'API da Manga Store online.' });
+});
+
+app.get('/sql/exemplos', async (_req, res) => {
+  return res.status(200).json({
+    mensagem: 'Exemplos de consultas SQL disponíveis.',
+    exemplos: [
+      '/sql/exemplos/where',
+      '/sql/exemplos/inner-join',
+      '/sql/exemplos/left-join',
+      '/sql/exemplos/right-join',
+      '/sql/exemplos/group-by',
+      '/sql/exemplos/subconsulta',
+    ],
+  });
+});
+
+app.get('/sql/exemplos/:tipo', async (req, res) => {
+  const tipo = req.params.tipo;
+
+  try {
+    if (tipo === 'where') {
+      const [dados] = await connection.execute<Array<{ id: number; titulo: string; categoria: string; preco: number }>>(
+        'SELECT id, titulo, categoria, preco FROM manga WHERE categoria = ? AND destaque = ? ORDER BY titulo',
+        ['mangas', 1]
+      );
+
+      return res.status(200).json({
+        descricao: 'SELECT com WHERE para filtrar obras por categoria e destaque.',
+        sql: 'SELECT id, titulo, categoria, preco FROM manga WHERE categoria = ? AND destaque = ? ORDER BY titulo',
+        dados,
+      });
+    }
+
+    if (tipo === 'inner-join') {
+      const [dados] = await connection.execute<Array<{ nome: string; numero_pedido: string; total: number }>>(
+        `SELECT c.nome, p.numero_pedido, p.total
+         FROM clientes c
+         INNER JOIN pedidos p ON c.id = p.cliente_id
+         ORDER BY p.numero_pedido`
+      );
+
+      return res.status(200).json({
+        descricao: 'INNER JOIN para relacionar clientes com seus pedidos.',
+        sql: 'SELECT c.nome, p.numero_pedido, p.total FROM clientes c INNER JOIN pedidos p ON c.id = p.cliente_id ORDER BY p.numero_pedido',
+        dados,
+      });
+    }
+
+    if (tipo === 'left-join') {
+      const [dados] = await connection.execute<Array<{ nome: string; numero_pedido: string | null; total: number | null }>>(
+        `SELECT c.nome, p.numero_pedido, p.total
+         FROM clientes c
+         LEFT JOIN pedidos p ON c.id = p.cliente_id
+         ORDER BY c.id`
+      );
+
+      return res.status(200).json({
+        descricao: 'LEFT JOIN para listar todos os clientes, mesmo sem pedidos.',
+        sql: 'SELECT c.nome, p.numero_pedido, p.total FROM clientes c LEFT JOIN pedidos p ON c.id = p.cliente_id ORDER BY c.id',
+        dados,
+      });
+    }
+
+    if (tipo === 'right-join') {
+      const [dados] = await connection.execute<Array<{ nome: string; numero_pedido: string | null; total: number | null }>>(
+        `SELECT c.nome, p.numero_pedido, p.total
+         FROM pedidos p
+         RIGHT JOIN clientes c ON p.cliente_id = c.id
+         ORDER BY c.id`
+      );
+
+      return res.status(200).json({
+        descricao: 'RIGHT JOIN para listar todos os clientes mesmo quando não houver pedidos.',
+        sql: 'SELECT c.nome, p.numero_pedido, p.total FROM pedidos p RIGHT JOIN clientes c ON p.cliente_id = c.id ORDER BY c.id',
+        dados,
+      });
+    }
+
+    if (tipo === 'group-by') {
+      const [dados] = await connection.execute<Array<{ categoria: string; total: number; estoque_total: number }>>(
+        `SELECT categoria, COUNT(*) AS total, SUM(estoque) AS estoque_total
+         FROM manga
+         GROUP BY categoria
+         HAVING COUNT(*) >= 2
+         ORDER BY total DESC`
+      );
+
+      return res.status(200).json({
+        descricao: 'GROUP BY e HAVING para agrupar obras por categoria e filtrar grupos.',
+        sql: 'SELECT categoria, COUNT(*) AS total, SUM(estoque) AS estoque_total FROM manga GROUP BY categoria HAVING COUNT(*) >= 2 ORDER BY total DESC',
+        dados,
+      });
+    }
+
+    if (tipo === 'subconsulta') {
+      const [dados] = await connection.execute<Array<{ titulo: string; preco: number }>>(
+        `SELECT titulo, preco
+         FROM manga
+         WHERE preco > (SELECT AVG(preco) FROM manga)
+         ORDER BY preco DESC`
+      );
+
+      return res.status(200).json({
+        descricao: 'Subconsulta para buscar obras acima da média de preço.',
+        sql: 'SELECT titulo, preco FROM manga WHERE preco > (SELECT AVG(preco) FROM manga) ORDER BY preco DESC',
+        dados,
+      });
+    }
+
+    return res.status(404).json({ mensagem: 'Tipo de exemplo SQL nao encontrado.' });
+  } catch (err) {
+    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
+    return mysqlErrorHandle.validar();
+  }
 });
 
 app.get('/categorias', async (_req, res) => {
@@ -508,9 +714,11 @@ app.patch('/mangas/:id', async (req, res) => {
   valores.push(id);
 
   try {
+    const nowFunction = connection.isSqlite ? 'CURRENT_TIMESTAMP' : 'NOW()';
+
     const [result] = await connection.execute<ResultSetHeader>(
       `UPDATE manga
-       SET ${atualizacoes.join(', ')}, data_modificacao = NOW()
+       SET ${atualizacoes.join(', ')}, data_modificacao = ${nowFunction}
        WHERE id = ?`,
       valores
     );

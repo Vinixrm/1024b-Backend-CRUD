@@ -37,3 +37,72 @@ ON DUPLICATE KEY UPDATE
   imagem_url = VALUES(imagem_url),
   descricao = VALUES(descricao),
   destaque = VALUES(destaque);
+
+CREATE TABLE IF NOT EXISTS clientes (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  nome VARCHAR(120) NOT NULL,
+  cidade VARCHAR(120) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pedidos (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  cliente_id INT NOT NULL,
+  numero_pedido VARCHAR(50) NOT NULL UNIQUE,
+  total DECIMAL(10,2) NOT NULL,
+  data_pedido DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (cliente_id) REFERENCES clientes(id)
+);
+
+INSERT INTO clientes (id, nome, cidade) VALUES
+  (1, 'Ana Silva', 'São Paulo'),
+  (2, 'Bruno Costa', 'Rio de Janeiro'),
+  (3, 'Carla Mendes', 'Belo Horizonte')
+ON DUPLICATE KEY UPDATE
+  nome = VALUES(nome),
+  cidade = VALUES(cidade);
+
+INSERT INTO pedidos (id, cliente_id, numero_pedido, total) VALUES
+  (1, 1, 'PED-1001', 89.90),
+  (2, 2, 'PED-1002', 129.80),
+  (3, 3, 'PED-1003', 59.90)
+ON DUPLICATE KEY UPDATE
+  cliente_id = VALUES(cliente_id),
+  numero_pedido = VALUES(numero_pedido),
+  total = VALUES(total);
+
+-- SELECT com WHERE
+SELECT id, titulo, categoria, preco
+FROM manga
+WHERE categoria = 'mangas' AND destaque = true
+ORDER BY titulo;
+
+-- INNER JOIN
+SELECT c.nome, p.numero_pedido, p.total
+FROM clientes c
+INNER JOIN pedidos p ON c.id = p.cliente_id
+ORDER BY p.numero_pedido;
+
+-- LEFT JOIN
+SELECT c.nome, p.numero_pedido, p.total
+FROM clientes c
+LEFT JOIN pedidos p ON c.id = p.cliente_id
+ORDER BY c.id;
+
+-- RIGHT JOIN
+SELECT c.nome, p.numero_pedido, p.total
+FROM pedidos p
+RIGHT JOIN clientes c ON p.cliente_id = c.id
+ORDER BY c.id;
+
+-- GROUP BY + HAVING
+SELECT categoria, COUNT(*) AS total, SUM(estoque) AS estoque_total
+FROM manga
+GROUP BY categoria
+HAVING COUNT(*) >= 2
+ORDER BY total DESC;
+
+-- Subconsulta
+SELECT titulo, preco
+FROM manga
+WHERE preco > (SELECT AVG(preco) FROM manga)
+ORDER BY preco DESC;
