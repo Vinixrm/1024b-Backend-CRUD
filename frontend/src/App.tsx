@@ -1,1056 +1,873 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import './App.css'
 
-interface Pessoa {
-  id: number;
-  nome: string;
+const API_URL = 'http://localhost:8000'
+
+const CATEGORIAS = [
+  { slug: 'todos', label: 'Todos' },
+  { slug: 'mangas', label: 'Mangas' },
+  { slug: 'super-herois', label: 'Super-herois' },
+  { slug: 'hqs', label: 'HQs' },
+  { slug: 'romance', label: 'Romance' },
+] as const
+
+const CAPA_FALLBACK =
+  'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="360" height="540" viewBox="0 0 360 540"%3E%3Crect width="360" height="540" fill="%23171822"/%3E%3Crect x="28" y="28" width="304" height="484" fill="%23f6c453" opacity=".9"/%3E%3Ctext x="180" y="255" text-anchor="middle" font-family="Arial" font-size="32" font-weight="700" fill="%23171822"%3EManga%3C/text%3E%3Ctext x="180" y="295" text-anchor="middle" font-family="Arial" font-size="20" fill="%23171822"%3ESem capa%3C/text%3E%3C/svg%3E'
+
+type Categoria = Exclude<(typeof CATEGORIAS)[number]['slug'], 'todos'>
+type Pagina = (typeof CATEGORIAS)[number]['slug']
+
+interface Manga {
+  id: number
+  titulo: string
+  autor: string
+  categoria: Categoria
+  preco: number
+  estoque: number
+  imagem_url: string
+  descricao: string
+  destaque: boolean
+  data_criacao: string
+  data_modificacao: string | null
 }
 
-interface Produto {
-  id: number;
-  nome: string;
-  categoria: string;
-  preco: number;
-  data_criacao: string;
-  data_modificacao: string | null;
+interface ResumoCategoria {
+  categoria: Categoria
+  total: number
+  estoque: number
+  preco_medio: number
 }
 
-type Aba = 'pessoas' | 'produtos';
+interface ItemCarrinho {
+  manga: Manga
+  quantidade: number
+}
+
+interface FormularioManga {
+  titulo: string
+  autor: string
+  categoria: Categoria
+  preco: string
+  estoque: string
+  imagem_url: string
+  descricao: string
+  destaque: boolean
+}
+
+const formularioInicial: FormularioManga = {
+  titulo: '',
+  autor: '',
+  categoria: 'mangas',
+  preco: '',
+  estoque: '',
+  imagem_url: '',
+  descricao: '',
+  destaque: false,
+}
+
+function paginaPelaHash(): Pagina {
+  const slug = window.location.hash.replace('#/', '')
+  const categoria = CATEGORIAS.find((item) => item.slug === slug)
+
+  return categoria?.slug ?? 'todos'
+}
+
+function formatarMoeda(valor: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(valor)
+}
+
+function labelCategoria(categoria: Categoria | Pagina) {
+  return CATEGORIAS.find((item) => item.slug === categoria)?.label ?? categoria
+}
+
+async function obterJson<T>(url: string, options?: RequestInit): Promise<T> {
+  const resposta = await fetch(url, options)
+
+  if (!resposta.ok) {
+    const erro = await resposta
+      .json()
+      .catch(() => ({ mensagem: 'Nao foi possivel concluir a requisicao.' }))
+    const mensagem =
+      typeof erro.mensagem === 'string'
+        ? erro.mensagem
+        : 'Nao foi possivel concluir a requisicao.'
+
+    throw new Error(mensagem)
+  }
+
+  return resposta.json() as Promise<T>
+}
 
 function App() {
-  const [pessoas, setPessoas] = useState<Pessoa[]>([]);
-  const [carregando, setCarregando] = useState(true);
-  const [erro, setErro] = useState<string | null>(null);
+  const [paginaAtiva, setPaginaAtiva] = useState<Pagina>(() => paginaPelaHash())
+  const [mangas, setMangas] = useState<Manga[]>([])
+  const [resumos, setResumos] = useState<ResumoCategoria[]>([])
+  const [carregando, setCarregando] = useState(true)
+  const [erro, setErro] = useState<string | null>(null)
+  const [busca, setBusca] = useState('')
+  const [buscaAplicada, setBuscaAplicada] = useState('')
+  const [formulario, setFormulario] =
+    useState<FormularioManga>(formularioInicial)
+  const [editandoId, setEditandoId] = useState<number | null>(null)
+  const [salvando, setSalvando] = useState(false)
+  const [mangaSelecionado, setMangaSelecionado] = useState<Manga | null>(null)
+  const [carrinho, setCarrinho] = useState<ItemCarrinho[]>([])
+  const [versaoCatalogo, setVersaoCatalogo] = useState(0)
 
-  const [novoId, setNovoId] = useState('');
-  const [novoNome, setNovoNome] = useState('');
-  const [salvando, setSalvando] = useState(false);
+  const totalCatalogo = useMemo(
+    () => resumos.reduce((total, item) => total + item.total, 0),
+    [resumos]
+  )
 
-  const [editandoId, setEditandoId] = useState<number | null>(null);
-  const [nomeEditado, setNomeEditado] = useState('');
+  const estoqueTotal = useMemo(
+    () => resumos.reduce((total, item) => total + item.estoque, 0),
+    [resumos]
+  )
 
-  const [abaAtiva, setAbaAtiva] = useState<Aba>('pessoas');
-  const [temaEscuro, setTemaEscuro] = useState(false);
+  const totalCarrinho = useMemo(
+    () =>
+      carrinho.reduce(
+        (total, item) => total + item.manga.preco * item.quantidade,
+        0
+      ),
+    [carrinho]
+  )
 
-  const [produtos, setProdutos] = useState<Produto[]>([]);
+  const quantidadeCarrinho = useMemo(
+    () => carrinho.reduce((total, item) => total + item.quantidade, 0),
+    [carrinho]
+  )
 
-const [novoProdutoId, setNovoProdutoId] = useState('');
-const [novoProdutoNome, setNovoProdutoNome] = useState('');
-const [novaCategoria, setNovaCategoria] = useState('');
-const [novoPreco, setNovoPreco] = useState('');
+  const destaques = useMemo(
+    () => mangas.filter((manga) => manga.destaque).slice(0, 4),
+    [mangas]
+  )
 
-const [editandoProdutoId, setEditandoProdutoId] = useState<number | null>(null);
-
-const [produtoEditado, setProdutoEditado] = useState({
-  nome: '',
-  categoria: '',
-  preco: '',
-});
-
-  async function carregarProdutos() {
-  try {
-    const resposta = await fetch('http://localhost:8000/produtos');
-
-    if (!resposta.ok) {
-      throw new Error('Erro ao buscar produtos');
-    }
-
-    const dados = await resposta.json();
-    setProdutos(dados);
-  } catch (erro) {
-    console.error(erro);
-  }
-}
-
-async function handleSalvarProduto() {
-  try {
-    const id = Number(novoProdutoId);
-    const preco = Number(novoPreco);
-
-    if (
-      novoProdutoId.trim() === '' ||
-      novoProdutoNome.trim() === '' ||
-      novaCategoria.trim() === '' ||
-      novoPreco.trim() === ''
-    ) {
-      alert('Preencha todos os campos do produto.');
-      return;
-    }
-
-    if (Number.isNaN(id) || Number.isNaN(preco) || id <= 0) {
-      alert('ID e preço devem ser números válidos.');
-      return;
-    }
-
-    const resposta = await fetch('http://localhost:8000/produtos', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        id,
-        nome: novoProdutoNome,
-        categoria: novaCategoria,
-        preco,
-      }),
-    });
-
-    if (!resposta.ok) {
-      const erro = await resposta.json();
-      throw new Error(erro.mensagem);
-    }
-
-    setNovoProdutoId('');
-    setNovoProdutoNome('');
-    setNovaCategoria('');
-    setNovoPreco('');
-
-    await carregarProdutos();
-  } catch (erro) {
-    if (erro instanceof Error) {
-      alert(erro.message);
-    }
-  }
-}
-
-async function handleDeletarProduto(id: number) {
-  try {
-    const resposta = await fetch(
-      `http://localhost:8000/produto/${id}`,
-      {
-        method: 'DELETE',
-      }
-    );
-
-    if (!resposta.ok) {
-      const erro = await resposta.json();
-      throw new Error(erro.mensagem);
-    }
-
-    setProdutos((lista) =>
-      lista.filter((produto) => produto.id !== id)
-    );
-  } catch (erro) {
-    if (erro instanceof Error) {
-      alert(erro.message);
-    }
-  }
-}
-
-function iniciarEdicaoProduto(produto: Produto) {
-  setEditandoProdutoId(produto.id);
-
-  setProdutoEditado({
-    nome: produto.nome,
-    categoria: produto.categoria,
-    preco: String(produto.preco),
-  });
-}
-
-function cancelarEdicaoProduto() {
-  setEditandoProdutoId(null);
-
-  setProdutoEditado({
-    nome: '',
-    categoria: '',
-    preco: '',
-  });
-}
-
-async function handleEditarProduto(id: number) {
-  try {
-    const precoEditado = Number(produtoEditado.preco);
-
-    if (
-      produtoEditado.nome.trim() === '' ||
-      produtoEditado.categoria.trim() === '' ||
-      produtoEditado.preco.trim() === ''
-    ) {
-      alert('Preencha todos os campos do produto.');
-      return;
-    }
-
-    if (Number.isNaN(precoEditado)) {
-      alert('Preço deve ser um número válido.');
-      return;
-    }
-
-    const resposta = await fetch(
-      `http://localhost:8000/produto/${id}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          nome: produtoEditado.nome,
-          categoria: produtoEditado.categoria,
-          preco: precoEditado,
-        }),
-      }
-    );
-
-    if (!resposta.ok) {
-      const erro = await resposta.json();
-      throw new Error(erro.mensagem);
-    }
-
-    await carregarProdutos();
-
-    setEditandoProdutoId(null);
-  } catch (erro) {
-    if (erro instanceof Error) {
-      alert(erro.message);
-    }
-  }
-}
+  const resumosPorCategoria = useMemo(() => {
+    return new Map(resumos.map((item) => [item.categoria, item]))
+  }, [resumos])
 
   useEffect(() => {
-    async function carregarPessoas() {
+    function sincronizarHash() {
+      setPaginaAtiva(paginaPelaHash())
+    }
+
+    sincronizarHash()
+    window.addEventListener('hashchange', sincronizarHash)
+
+    return () => window.removeEventListener('hashchange', sincronizarHash)
+  }, [])
+
+  useEffect(() => {
+    let ativo = true
+
+    async function carregarCatalogo() {
+      const parametros = new URLSearchParams()
+
+      if (paginaAtiva !== 'todos') {
+        parametros.set('categoria', paginaAtiva)
+      }
+
+      if (buscaAplicada) {
+        parametros.set('busca', buscaAplicada)
+      }
+
+      const query = parametros.toString()
+      const url = query ? `${API_URL}/mangas?${query}` : `${API_URL}/mangas`
+
       try {
-        setCarregando(true);
-        setErro(null);
+        setCarregando(true)
+        setErro(null)
+        const dados = await obterJson<Manga[]>(url)
 
-        const resposta = await fetch('http://localhost:8000/pessoas');
-
-        if (!resposta.ok) {
-          throw new Error('Erro ao buscar pessoas');
+        if (ativo) {
+          setMangas(dados)
         }
-
-        const dados = await resposta.json();
-        setPessoas(dados);
-      } catch (e: unknown) {
-        if (e instanceof Error) {
-          setErro(e.message);
-        } else {
-          setErro('Erro inesperado');
+      } catch (e) {
+        if (ativo) {
+          setErro(e instanceof Error ? e.message : 'Erro inesperado.')
+          setMangas([])
         }
       } finally {
-        setCarregando(false);
+        if (ativo) {
+          setCarregando(false)
+        }
       }
     }
 
-    carregarPessoas();
-  }, []);
+    carregarCatalogo()
+
+    return () => {
+      ativo = false
+    }
+  }, [paginaAtiva, buscaAplicada, versaoCatalogo])
 
   useEffect(() => {
-    carregarProdutos();
-  }, []);
+    let ativo = true
 
-  async function recarregarPessoas() {
-    try {
-      setCarregando(true);
-      setErro(null);
-
-      const resposta = await fetch('http://localhost:8000/pessoas');
-
-      if (!resposta.ok) {
-        throw new Error('Erro ao buscar pessoas');
-      }
-
-      const dados = await resposta.json();
-      setPessoas(dados);
-    } catch (e: unknown) {
-      if (e instanceof Error) {
-        setErro(e.message);
-      } else {
-        setErro('Erro inesperado');
-      }
-    } finally {
-      setCarregando(false);
-    }
-  }
-
-  async function handleSalvar() {
-    try {
-      setSalvando(true);
-
-      const resposta = await fetch('http://localhost:8000/pessoas', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          id: Number(novoId),
-          nome: novoNome,
-        }),
-      });
-
-      if (!resposta.ok) {
-        const erroResposta = await resposta.json();
-        throw new Error(erroResposta.mensagem || 'Erro ao cadastrar pessoa');
-      }
-
-      setNovoId('');
-      setNovoNome('');
-      await recarregarPessoas();
-    } catch (e: unknown) {
-      if (e instanceof Error) {
-        alert(e.message);
-      } else {
-        alert('Erro desconhecido ao salvar');
-      }
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  async function handleDeletar(id: number) {
-    try {
-      const resposta = await fetch(`http://localhost:8000/pessoa/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (!resposta.ok) {
-        const erroResposta = await resposta.json();
-        throw new Error(erroResposta.mensagem || 'Erro ao deletar pessoa');
-      }
-
-      setPessoas((listaAtual) =>
-        listaAtual.filter((pessoa) => pessoa.id !== id)
-      );
-    } catch (e: unknown) {
-      if (e instanceof Error) {
-        alert(e.message);
-      } else {
-        alert('Erro desconhecido ao deletar.');
-      }
-    }
-  }
-
-  async function handleEditar(id: number) {
-    try {
-      const resposta = await fetch(`http://localhost:8000/pessoa/${id}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          nome: nomeEditado,
-        }),
-      });
-
-      if (!resposta.ok) {
-        const erroResposta = await resposta.json();
-        throw new Error(erroResposta.mensagem || 'Erro ao editar pessoa');
-      }
-
-      setPessoas((listaAtual) =>
-        listaAtual.map((pessoa) =>
-          pessoa.id === id ? { ...pessoa, nome: nomeEditado } : pessoa
+    async function carregarResumos() {
+      try {
+        const dados = await obterJson<ResumoCategoria[]>(
+          `${API_URL}/categorias`
         )
-      );
 
-      setEditandoId(null);
-      setNomeEditado('');
-    } catch (e: unknown) {
-      if (e instanceof Error) {
-        alert(e.message);
-      } else {
-        alert('Erro desconhecido ao editar.');
+        if (ativo) {
+          setResumos(dados)
+        }
+      } catch {
+        if (ativo) {
+          setResumos([])
+        }
       }
+    }
+
+    carregarResumos()
+
+    return () => {
+      ativo = false
+    }
+  }, [versaoCatalogo])
+
+  function navegarPara(pagina: Pagina) {
+    window.location.hash = `#/${pagina}`
+    setPaginaAtiva(pagina)
+  }
+
+  function recarregarCatalogo() {
+    setVersaoCatalogo((valor) => valor + 1)
+  }
+
+  function atualizarCampo<K extends keyof FormularioManga>(
+    campo: K,
+    valor: FormularioManga[K]
+  ) {
+    setFormulario((atual) => ({ ...atual, [campo]: valor }))
+  }
+
+  function limparFormulario() {
+    setFormulario(formularioInicial)
+    setEditandoId(null)
+  }
+
+  function prepararEdicao(manga: Manga) {
+    setEditandoId(manga.id)
+    setFormulario({
+      titulo: manga.titulo,
+      autor: manga.autor,
+      categoria: manga.categoria,
+      preco: String(manga.preco),
+      estoque: String(manga.estoque),
+      imagem_url: manga.imagem_url,
+      descricao: manga.descricao,
+      destaque: manga.destaque,
+    })
+
+    document
+      .getElementById('gerenciar-catalogo')
+      ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  async function salvarManga(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    const preco = Number(formulario.preco)
+    const estoque = Number(formulario.estoque)
+
+    if (
+      !formulario.titulo.trim() ||
+      !formulario.autor.trim() ||
+      !formulario.descricao.trim()
+    ) {
+      alert('Preencha titulo, autor e descricao.')
+      return
+    }
+
+    if (Number.isNaN(preco) || preco <= 0) {
+      alert('Preco deve ser maior que zero.')
+      return
+    }
+
+    if (!Number.isInteger(estoque) || estoque < 0) {
+      alert('Estoque deve ser um numero inteiro maior ou igual a zero.')
+      return
+    }
+
+    const payload = {
+      titulo: formulario.titulo.trim(),
+      autor: formulario.autor.trim(),
+      categoria: formulario.categoria,
+      preco,
+      estoque,
+      imagem_url: formulario.imagem_url.trim(),
+      descricao: formulario.descricao.trim(),
+      destaque: formulario.destaque,
+    }
+
+    const editando = editandoId !== null
+    const url = editando ? `${API_URL}/mangas/${editandoId}` : `${API_URL}/mangas`
+
+    try {
+      setSalvando(true)
+      await obterJson(url, {
+        method: editando ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      limparFormulario()
+      recarregarCatalogo()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao salvar manga.')
+    } finally {
+      setSalvando(false)
     }
   }
 
-  function iniciarEdicao(id: number, nome: string) {
-    setEditandoId(id);
-    setNomeEditado(nome);
+  async function excluirManga(manga: Manga) {
+    const confirmou = window.confirm(`Excluir "${manga.titulo}" do catalogo?`)
+
+    if (!confirmou) {
+      return
+    }
+
+    try {
+      await obterJson<{ mensagem: string }>(`${API_URL}/mangas/${manga.id}`, {
+        method: 'DELETE',
+      })
+
+      if (editandoId === manga.id) {
+        limparFormulario()
+      }
+
+      setCarrinho((itens) =>
+        itens.filter((item) => item.manga.id !== manga.id)
+      )
+      setMangaSelecionado((selecionado) =>
+        selecionado?.id === manga.id ? null : selecionado
+      )
+      recarregarCatalogo()
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao excluir manga.')
+    }
   }
 
-  function cancelarEdicao() {
-    setEditandoId(null);
-    setNomeEditado('');
+  async function abrirDetalhes(id: number) {
+    try {
+      const manga = await obterJson<Manga>(`${API_URL}/mangas/${id}`)
+      setMangaSelecionado(manga)
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Erro ao abrir detalhes.')
+    }
   }
 
-  function alternarTema() {
-    setTemaEscuro((valorAtual) => !valorAtual);
+  function adicionarAoCarrinho(manga: Manga) {
+    if (manga.estoque <= 0) {
+      alert('Item sem estoque.')
+      return
+    }
+
+    setCarrinho((itens) => {
+      const itemAtual = itens.find((item) => item.manga.id === manga.id)
+
+      if (!itemAtual) {
+        return [...itens, { manga, quantidade: 1 }]
+      }
+
+      if (itemAtual.quantidade >= manga.estoque) {
+        alert('Quantidade maxima em estoque adicionada.')
+        return itens
+      }
+
+      return itens.map((item) =>
+        item.manga.id === manga.id
+          ? { ...item, quantidade: item.quantidade + 1 }
+          : item
+      )
+    })
   }
 
-  function gerarIniciais(nome: string) {
-    return nome
-      .trim()
-      .split(' ')
-      .slice(0, 2)
-      .map((parte) => parte[0]?.toUpperCase())
-      .join('');
+  function removerDoCarrinho(id: number) {
+    setCarrinho((itens) =>
+      itens
+        .map((item) =>
+          item.manga.id === id
+            ? { ...item, quantidade: item.quantidade - 1 }
+            : item
+        )
+        .filter((item) => item.quantidade > 0)
+    )
   }
 
-  const estilos = {
-    app: {
-      minHeight: '100vh',
-      backgroundColor: temaEscuro ? '#171614' : '#f7f6f2',
-      color: temaEscuro ? '#cdccca' : '#28251d',
-      fontFamily: 'Arial, sans-serif',
-      transition: 'all 0.2s ease',
-    } as React.CSSProperties,
+  function pesquisar(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setBuscaAplicada(busca.trim())
+  }
 
-    topbar: {
-      height: '60px',
-      borderBottom: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      backgroundColor: temaEscuro ? '#1c1b19' : '#ffffff',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 24px',
-      boxShadow: temaEscuro
-        ? '0 2px 10px rgba(0,0,0,0.25)'
-        : '0 2px 10px rgba(0,0,0,0.05)',
-    } as React.CSSProperties,
+  function limparPesquisa() {
+    setBusca('')
+    setBuscaAplicada('')
+  }
 
-    logo: {
-      fontSize: '18px',
-      fontWeight: 700,
-      color: temaEscuro ? '#4f98a3' : '#01696f',
-    } as React.CSSProperties,
+  function totalDaCategoria(pagina: Pagina) {
+    if (pagina === 'todos') {
+      return totalCatalogo
+    }
 
-    botaoTema: {
-      padding: '8px 14px',
-      borderRadius: '8px',
-      border: 'none',
-      cursor: 'pointer',
-      backgroundColor: temaEscuro ? '#313b3b' : '#e0f0ef',
-      color: temaEscuro ? '#4f98a3' : '#01696f',
-      fontWeight: 600,
-    } as React.CSSProperties,
+    return resumosPorCategoria.get(pagina)?.total ?? 0
+  }
 
-    abas: {
-      display: 'flex',
-      gap: '8px',
-      padding: '0 24px',
-      backgroundColor: temaEscuro ? '#1c1b19' : '#ffffff',
-      borderBottom: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-    } as React.CSSProperties,
-
-    aba: (ativa: boolean): React.CSSProperties => ({
-      padding: '14px 18px',
-      border: 'none',
-      background: 'none',
-      cursor: 'pointer',
-      fontSize: '14px',
-      fontWeight: 700,
-      color: ativa ? (temaEscuro ? '#4f98a3' : '#01696f') : '#7a7974',
-      borderBottom: ativa
-        ? `3px solid ${temaEscuro ? '#4f98a3' : '#01696f'}`
-        : '3px solid transparent',
-    }),
-
-    container: {
-      maxWidth: '1100px',
-      margin: '0 auto',
-      padding: '24px',
-    } as React.CSSProperties,
-
-    tituloPagina: {
-      fontSize: '28px',
-      fontWeight: 700,
-      marginBottom: '6px',
-    } as React.CSSProperties,
-
-    subtitulo: {
-      color: '#7a7974',
-      marginBottom: '24px',
-    } as React.CSSProperties,
-
-    cardInfo: {
-      backgroundColor: temaEscuro ? '#1c1b19' : '#ffffff',
-      border: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      borderRadius: '14px',
-      padding: '18px 20px',
-      marginBottom: '20px',
-      boxShadow: temaEscuro
-        ? '0 4px 16px rgba(0,0,0,0.25)'
-        : '0 4px 16px rgba(0,0,0,0.05)',
-    } as React.CSSProperties,
-
-    numeroInfo: {
-      fontSize: '30px',
-      fontWeight: 700,
-      color: temaEscuro ? '#4f98a3' : '#01696f',
-    } as React.CSSProperties,
-
-    legendaInfo: {
-      fontSize: '13px',
-      color: '#7a7974',
-    } as React.CSSProperties,
-
-    card: {
-      backgroundColor: temaEscuro ? '#1c1b19' : '#ffffff',
-      border: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      borderRadius: '14px',
-      marginBottom: '20px',
-      overflow: 'hidden',
-      boxShadow: temaEscuro
-        ? '0 4px 16px rgba(0,0,0,0.25)'
-        : '0 4px 16px rgba(0,0,0,0.05)',
-    } as React.CSSProperties,
-
-    cardHeader: {
-      padding: '16px 20px',
-      borderBottom: temaEscuro ? '1px solid #393836' : '1px solid #ece8e2',
-      fontWeight: 700,
-      fontSize: '16px',
-    } as React.CSSProperties,
-
-    cardBody: {
-      padding: '20px',
-    } as React.CSSProperties,
-
-    formGrid: {
-      display: 'grid',
-      gridTemplateColumns: '120px 1fr auto',
-      gap: '10px',
-      alignItems: 'end',
-    } as React.CSSProperties,
-
-    campo: {
-      display: 'flex',
-      flexDirection: 'column',
-      gap: '6px',
-    } as React.CSSProperties,
-
-    label: {
-      fontSize: '13px',
-      fontWeight: 600,
-      color: '#7a7974',
-    } as React.CSSProperties,
-
-    input: {
-      height: '40px',
-      padding: '0 12px',
-      borderRadius: '8px',
-      border: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      backgroundColor: temaEscuro ? '#252421' : '#f7f6f2',
-      color: temaEscuro ? '#cdccca' : '#28251d',
-      outline: 'none',
-    } as React.CSSProperties,
-
-    botaoPrimario: {
-      height: '40px',
-      padding: '0 18px',
-      borderRadius: '8px',
-      border: 'none',
-      cursor: 'pointer',
-      backgroundColor: temaEscuro ? '#4f98a3' : '#01696f',
-      color: '#ffffff',
-      fontWeight: 700,
-    } as React.CSSProperties,
-
-    erro: {
-      marginBottom: '16px',
-      padding: '12px 14px',
-      borderRadius: '8px',
-      backgroundColor: temaEscuro ? '#2a1a24' : '#f8eef4',
-      color: temaEscuro ? '#d163a7' : '#a12c7b',
-      fontSize: '14px',
-      fontWeight: 600,
-    } as React.CSSProperties,
-
-    tabelaWrapper: {
-      overflowX: 'auto',
-    } as React.CSSProperties,
-
-    tabela: {
-      width: '100%',
-      borderCollapse: 'collapse',
-    } as React.CSSProperties,
-
-    th: {
-      textAlign: 'left',
-      padding: '12px 16px',
-      fontSize: '12px',
-      textTransform: 'uppercase' as const,
-      letterSpacing: '0.06em',
-      color: '#7a7974',
-      backgroundColor: temaEscuro ? '#252421' : '#f3f0ec',
-      borderBottom: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-    } as React.CSSProperties,
-
-    td: {
-      padding: '14px 16px',
-      borderBottom: temaEscuro ? '1px solid #2a2927' : '1px solid #ece8e2',
-      verticalAlign: 'middle',
-    } as React.CSSProperties,
-
-    avatarLinha: {
-      display: 'flex',
-      alignItems: 'center',
-      gap: '10px',
-    } as React.CSSProperties,
-
-    avatar: {
-      width: '32px',
-      height: '32px',
-      borderRadius: '50%',
-      backgroundColor: temaEscuro ? '#313b3b' : '#e0f0ef',
-      color: temaEscuro ? '#4f98a3' : '#01696f',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      fontWeight: 700,
-      fontSize: '12px',
-    } as React.CSSProperties,
-
-    acoes: {
-      display: 'flex',
-      justifyContent: 'flex-end',
-      gap: '8px',
-    } as React.CSSProperties,
-
-    botaoSecundario: {
-      height: '32px',
-      padding: '0 12px',
-      borderRadius: '8px',
-      border: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      backgroundColor: 'transparent',
-      color: temaEscuro ? '#cdccca' : '#28251d',
-      cursor: 'pointer',
-      fontWeight: 600,
-    } as React.CSSProperties,
-
-    botaoPerigo: {
-      height: '32px',
-      padding: '0 12px',
-      borderRadius: '8px',
-      border: 'none',
-      backgroundColor: temaEscuro ? '#2a1a24' : '#f8eef4',
-      color: temaEscuro ? '#d163a7' : '#a12c7b',
-      cursor: 'pointer',
-      fontWeight: 600,
-    } as React.CSSProperties,
-
-    vazio: {
-      padding: '40px 20px',
-      textAlign: 'center' as const,
-      color: '#7a7974',
-    },
-
-    inputEdicao: {
-      height: '34px',
-      padding: '0 10px',
-      borderRadius: '8px',
-      border: temaEscuro ? '1px solid #393836' : '1px solid #d4d1ca',
-      backgroundColor: temaEscuro ? '#252421' : '#f7f6f2',
-      color: temaEscuro ? '#cdccca' : '#28251d',
-      outline: 'none',
-      minWidth: '220px',
-    } as React.CSSProperties,
-  };
+  const tituloPagina =
+    paginaAtiva === 'todos'
+      ? 'Catalogo completo'
+      : `Categoria ${labelCategoria(paginaAtiva)}`
 
   return (
-    <div style={estilos.app}>
-      <header style={estilos.topbar}>
-        <div style={estilos.logo}>Instituto Federal — CRUD</div>
-
-        <button style={estilos.botaoTema} onClick={alternarTema}>
-          {temaEscuro ? 'Tema claro' : 'Tema escuro'}
+    <div className="store-app">
+      <header className="store-header">
+        <button className="brand" type="button" onClick={() => navegarPara('todos')}>
+          <span className="brand-mark">MS</span>
+          <span>
+            Manga Store
+            <small>CRUD</small>
+          </span>
         </button>
+
+        <nav className="top-nav" aria-label="Categorias principais">
+          {CATEGORIAS.map((categoria) => (
+            <button
+              className={categoria.slug === paginaAtiva ? 'active' : ''}
+              key={categoria.slug}
+              type="button"
+              onClick={() => navegarPara(categoria.slug)}
+            >
+              {categoria.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="cart-pill">
+          <span>{quantidadeCarrinho} itens</span>
+          <strong>{formatarMoeda(totalCarrinho)}</strong>
+        </div>
       </header>
 
-      <nav style={estilos.abas}>
-        <button
-          style={estilos.aba(abaAtiva === 'pessoas')}
-          onClick={() => setAbaAtiva('pessoas')}
-        >
-          Pessoas ({pessoas.length})
-        </button>
+      <main>
+        <section className="catalog-band">
+          <div className="catalog-copy">
+            <p className="eyebrow">Loja online</p>
+            <h1>{tituloPagina}</h1>
+            <p>
+              Mangas, HQs, super-herois e romances graficos em um catalogo com
+              estoque, capas e gerenciamento completo.
+            </p>
 
-        <button
-          style={estilos.aba(abaAtiva === 'produtos')}
-          onClick={() => setAbaAtiva('produtos')}
-        >
-          Produtos
-        </button>
-      </nav>
+            <form className="search-row" onSubmit={pesquisar}>
+              <input
+                aria-label="Buscar por titulo, autor ou descricao"
+                placeholder="Buscar titulo, autor ou descricao"
+                value={busca}
+                onChange={(event) => setBusca(event.target.value)}
+              />
+              <button type="submit">Buscar</button>
+              {buscaAplicada && (
+                <button className="ghost-button" type="button" onClick={limparPesquisa}>
+                  Limpar
+                </button>
+              )}
+            </form>
+          </div>
 
-      <main style={estilos.container}>
-        {abaAtiva === 'pessoas' && (
-          <>
-            <div style={{ marginBottom: '24px' }}>
-              <h1 style={estilos.tituloPagina}>Pessoas</h1>
-              <p style={estilos.subtitulo}>
-                Cadastro, edição e exclusão de pessoas em uma interface mais organizada.
-              </p>
-            </div>
-
-            <div style={estilos.cardInfo}>
-              <div style={estilos.numeroInfo}>{pessoas.length}</div>
-              <div style={estilos.legendaInfo}>Total de pessoas cadastradas</div>
-            </div>
-
-            <div style={estilos.card}>
-              <div style={estilos.cardHeader}>Cadastrar pessoa</div>
-
-              <div style={estilos.cardBody}>
-                <div style={estilos.formGrid}>
-                  <div style={estilos.campo}>
-                    <label style={estilos.label}>ID</label>
-                    <input
-                      type="number"
-                      value={novoId}
-                      onChange={(e) => setNovoId(e.target.value)}
-                      style={estilos.input}
-                      placeholder="Ex: 1"
-                    />
-                  </div>
-
-                  <div style={estilos.campo}>
-                    <label style={estilos.label}>Nome</label>
-                    <input
-                      type="text"
-                      value={novoNome}
-                      onChange={(e) => setNovoNome(e.target.value)}
-                      style={estilos.input}
-                      placeholder="Digite o nome"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleSalvar}
-                    disabled={salvando}
-                    style={estilos.botaoPrimario}
-                  >
-                    {salvando ? 'Salvando...' : 'Salvar'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {erro && <div style={estilos.erro}>Erro: {erro}</div>}
-
-            <div style={estilos.card}>
-              <div
-                style={{
-                  ...estilos.cardHeader,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
+          <div className="cover-rail" aria-label="Capas em destaque">
+            {(destaques.length > 0 ? destaques : mangas.slice(0, 4)).map((manga) => (
+              <button
+                className="rail-cover"
+                key={manga.id}
+                type="button"
+                onClick={() => abrirDetalhes(manga.id)}
+                title={manga.titulo}
               >
-                <span>Lista de pessoas</span>
+                <img
+                  alt={`Capa de ${manga.titulo}`}
+                  src={manga.imagem_url || CAPA_FALLBACK}
+                  onError={(event) => {
+                    event.currentTarget.onerror = null
+                    event.currentTarget.src = CAPA_FALLBACK
+                  }}
+                />
+              </button>
+            ))}
+          </div>
+        </section>
 
-                <button style={estilos.botaoSecundario} onClick={recarregarPessoas}>
-                  Atualizar
+        <section className="metrics-row" aria-label="Resumo do catalogo">
+          <div>
+            <span>{totalCatalogo}</span>
+            <p>Titulos</p>
+          </div>
+          <div>
+            <span>{estoqueTotal}</span>
+            <p>Unidades</p>
+          </div>
+          <div>
+            <span>{CATEGORIAS.length - 1}</span>
+            <p>Categorias</p>
+          </div>
+          <div>
+            <span>{formatarMoeda(totalCarrinho)}</span>
+            <p>Sacola</p>
+          </div>
+        </section>
+
+        <div className="store-layout">
+          <aside className="side-panel">
+            <h2>Subpaginas</h2>
+            <div className="category-list">
+              {CATEGORIAS.map((categoria) => (
+                <button
+                  className={categoria.slug === paginaAtiva ? 'active' : ''}
+                  key={categoria.slug}
+                  type="button"
+                  onClick={() => navegarPara(categoria.slug)}
+                >
+                  <span>{categoria.label}</span>
+                  <strong>{totalDaCategoria(categoria.slug)}</strong>
+                </button>
+              ))}
+            </div>
+          </aside>
+
+          <section className="catalog-area">
+            <div className="section-heading">
+              <div>
+                <p className="eyebrow">Vitrine</p>
+                <h2>{tituloPagina}</h2>
+              </div>
+              <button className="ghost-button" type="button" onClick={recarregarCatalogo}>
+                Atualizar
+              </button>
+            </div>
+
+            {erro && <div className="feedback error">{erro}</div>}
+
+            {carregando ? (
+              <div className="feedback">Carregando catalogo...</div>
+            ) : mangas.length === 0 ? (
+              <div className="feedback">Nenhum titulo encontrado.</div>
+            ) : (
+              <div className="product-grid">
+                {mangas.map((manga) => (
+                  <article className="product-card" key={manga.id}>
+                    <button
+                      className="cover-button"
+                      type="button"
+                      onClick={() => abrirDetalhes(manga.id)}
+                    >
+                      <img
+                        alt={`Capa de ${manga.titulo}`}
+                        src={manga.imagem_url || CAPA_FALLBACK}
+                        onError={(event) => {
+                          event.currentTarget.onerror = null
+                          event.currentTarget.src = CAPA_FALLBACK
+                        }}
+                      />
+                    </button>
+
+                    <div className="product-body">
+                      <div className="product-tags">
+                        <span>{labelCategoria(manga.categoria)}</span>
+                        {manga.destaque && <strong>Destaque</strong>}
+                      </div>
+                      <h3>{manga.titulo}</h3>
+                      <p>{manga.autor}</p>
+                      <div className="product-meta">
+                        <strong>{formatarMoeda(manga.preco)}</strong>
+                        <span>{manga.estoque} un.</span>
+                      </div>
+                    </div>
+
+                    <div className="product-actions">
+                      <button type="button" onClick={() => adicionarAoCarrinho(manga)}>
+                        Comprar
+                      </button>
+                      <button
+                        className="ghost-button"
+                        type="button"
+                        onClick={() => prepararEdicao(manga)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        className="danger-button"
+                        type="button"
+                        onClick={() => excluirManga(manga)}
+                      >
+                        Excluir
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <aside className="cart-panel">
+            <div className="section-heading compact">
+              <div>
+                <p className="eyebrow">Sacola</p>
+                <h2>{quantidadeCarrinho} itens</h2>
+              </div>
+              {carrinho.length > 0 && (
+                <button className="ghost-button" type="button" onClick={() => setCarrinho([])}>
+                  Limpar
+                </button>
+              )}
+            </div>
+
+            {carrinho.length === 0 ? (
+              <p className="empty-text">Sua sacola esta vazia.</p>
+            ) : (
+              <div className="cart-list">
+                {carrinho.map((item) => (
+                  <div className="cart-item" key={item.manga.id}>
+                    <img
+                      alt=""
+                      src={item.manga.imagem_url || CAPA_FALLBACK}
+                      onError={(event) => {
+                        event.currentTarget.onerror = null
+                        event.currentTarget.src = CAPA_FALLBACK
+                      }}
+                    />
+                    <div>
+                      <strong>{item.manga.titulo}</strong>
+                      <span>
+                        {item.quantidade} x {formatarMoeda(item.manga.preco)}
+                      </span>
+                    </div>
+                    <button type="button" onClick={() => removerDoCarrinho(item.manga.id)}>
+                      -
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="cart-total">
+              <span>Total</span>
+              <strong>{formatarMoeda(totalCarrinho)}</strong>
+            </div>
+          </aside>
+        </div>
+
+        <section className="admin-section" id="gerenciar-catalogo">
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Gerenciamento</p>
+              <h2>{editandoId ? 'Editar titulo' : 'Cadastrar titulo'}</h2>
+            </div>
+            {editandoId && (
+              <button className="ghost-button" type="button" onClick={limparFormulario}>
+                Cancelar edicao
+              </button>
+            )}
+          </div>
+
+          <form className="admin-form" onSubmit={salvarManga}>
+            <label>
+              Titulo
+              <input
+                value={formulario.titulo}
+                onChange={(event) => atualizarCampo('titulo', event.target.value)}
+                placeholder="Ex: Spy x Family Vol. 1"
+              />
+            </label>
+
+            <label>
+              Autor
+              <input
+                value={formulario.autor}
+                onChange={(event) => atualizarCampo('autor', event.target.value)}
+                placeholder="Ex: Tatsuya Endo"
+              />
+            </label>
+
+            <label>
+              Categoria
+              <select
+                value={formulario.categoria}
+                onChange={(event) =>
+                  atualizarCampo('categoria', event.target.value as Categoria)
+                }
+              >
+                {CATEGORIAS.filter((categoria) => categoria.slug !== 'todos').map(
+                  (categoria) => (
+                    <option key={categoria.slug} value={categoria.slug}>
+                      {categoria.label}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
+
+            <label>
+              Preco
+              <input
+                min="0"
+                step="0.01"
+                type="number"
+                value={formulario.preco}
+                onChange={(event) => atualizarCampo('preco', event.target.value)}
+                placeholder="39.90"
+              />
+            </label>
+
+            <label>
+              Estoque
+              <input
+                min="0"
+                step="1"
+                type="number"
+                value={formulario.estoque}
+                onChange={(event) => atualizarCampo('estoque', event.target.value)}
+                placeholder="12"
+              />
+            </label>
+
+            <label>
+              Link da capa
+              <input
+                value={formulario.imagem_url}
+                onChange={(event) =>
+                  atualizarCampo('imagem_url', event.target.value)
+                }
+                placeholder="https://..."
+              />
+            </label>
+
+            <label className="wide-field">
+              Descricao
+              <textarea
+                value={formulario.descricao}
+                onChange={(event) => atualizarCampo('descricao', event.target.value)}
+                placeholder="Resumo curto para a vitrine"
+              />
+            </label>
+
+            <label className="toggle-field">
+              <input
+                checked={formulario.destaque}
+                type="checkbox"
+                onChange={(event) => atualizarCampo('destaque', event.target.checked)}
+              />
+              Marcar como destaque
+            </label>
+
+            <div className="form-actions">
+              <button type="submit" disabled={salvando}>
+                {salvando ? 'Salvando...' : editandoId ? 'Salvar edicao' : 'Cadastrar'}
+              </button>
+              <button className="ghost-button" type="button" onClick={limparFormulario}>
+                Limpar
+              </button>
+            </div>
+          </form>
+
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Titulo</th>
+                  <th>Categoria</th>
+                  <th>Preco</th>
+                  <th>Estoque</th>
+                  <th>Acoes</th>
+                </tr>
+              </thead>
+              <tbody>
+                {mangas.map((manga) => (
+                  <tr key={manga.id}>
+                    <td>
+                      <strong>{manga.titulo}</strong>
+                      <span>{manga.autor}</span>
+                    </td>
+                    <td>{labelCategoria(manga.categoria)}</td>
+                    <td>{formatarMoeda(manga.preco)}</td>
+                    <td>{manga.estoque}</td>
+                    <td>
+                      <div className="table-actions">
+                        <button type="button" onClick={() => prepararEdicao(manga)}>
+                          Editar
+                        </button>
+                        <button
+                          className="danger-button"
+                          type="button"
+                          onClick={() => excluirManga(manga)}
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      {mangaSelecionado && (
+        <div className="modal-backdrop" role="presentation">
+          <article className="detail-modal" role="dialog" aria-modal="true">
+            <button
+              className="close-button"
+              type="button"
+              onClick={() => setMangaSelecionado(null)}
+              aria-label="Fechar"
+            >
+              x
+            </button>
+            <img
+              alt={`Capa de ${mangaSelecionado.titulo}`}
+              src={mangaSelecionado.imagem_url || CAPA_FALLBACK}
+              onError={(event) => {
+                event.currentTarget.onerror = null
+                event.currentTarget.src = CAPA_FALLBACK
+              }}
+            />
+            <div>
+              <span className="detail-category">
+                {labelCategoria(mangaSelecionado.categoria)}
+              </span>
+              <h2>{mangaSelecionado.titulo}</h2>
+              <p className="detail-author">{mangaSelecionado.autor}</p>
+              <p>{mangaSelecionado.descricao}</p>
+              <div className="detail-price">
+                <strong>{formatarMoeda(mangaSelecionado.preco)}</strong>
+                <span>{mangaSelecionado.estoque} unidades em estoque</span>
+              </div>
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  onClick={() => adicionarAoCarrinho(mangaSelecionado)}
+                >
+                  Comprar
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => prepararEdicao(mangaSelecionado)}
+                >
+                  Editar
                 </button>
               </div>
-
-              <div style={estilos.tabelaWrapper}>
-                <table style={estilos.tabela}>
-                  <thead>
-                    <tr>
-                      <th style={estilos.th}>ID</th>
-                      <th style={estilos.th}>Nome</th>
-                      <th style={{ ...estilos.th, textAlign: 'right' }}>Ações</th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    {carregando ? (
-                      <tr>
-                        <td colSpan={3} style={estilos.td}>
-                          Carregando...
-                        </td>
-                      </tr>
-                    ) : pessoas.length === 0 ? (
-                      <tr>
-                        <td colSpan={3} style={estilos.vazio}>
-                          Nenhuma pessoa encontrada.
-                        </td>
-                      </tr>
-                    ) : (
-                      pessoas.map((pessoa) => (
-                        <tr key={pessoa.id}>
-                          <td style={estilos.td}>{pessoa.id}</td>
-
-                          <td style={estilos.td}>
-                            {editandoId === pessoa.id ? (
-                              <input
-                                type="text"
-                                value={nomeEditado}
-                                onChange={(e) => setNomeEditado(e.target.value)}
-                                style={estilos.inputEdicao}
-                              />
-                            ) : (
-                              <div style={estilos.avatarLinha}>
-                                <div style={estilos.avatar}>
-                                  {gerarIniciais(pessoa.nome)}
-                                </div>
-                                <span>{pessoa.nome}</span>
-                              </div>
-                            )}
-                          </td>
-
-                          <td style={estilos.td}>
-                            <div style={estilos.acoes}>
-                              {editandoId === pessoa.id ? (
-                                <>
-                                  <button
-                                    style={estilos.botaoPrimario}
-                                    onClick={() => handleEditar(pessoa.id)}
-                                  >
-                                    Salvar edição
-                                  </button>
-
-                                  <button
-                                    style={estilos.botaoSecundario}
-                                    onClick={cancelarEdicao}
-                                  >
-                                    Cancelar
-                                  </button>
-                                </>
-                              ) : (
-                                <>
-                                  <button
-                                    style={estilos.botaoSecundario}
-                                    onClick={() =>
-                                      iniciarEdicao(pessoa.id, pessoa.nome)
-                                    }
-                                  >
-                                    Editar
-                                  </button>
-
-                                  <button
-                                    style={estilos.botaoPerigo}
-                                    onClick={() => handleDeletar(pessoa.id)}
-                                  >
-                                    Deletar
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </div>
-          </>
-        )}
-{abaAtiva === 'produtos' && (
-  <>
-    <div style={{ marginBottom: '24px' }}>
-      <h1 style={estilos.tituloPagina}>Produtos</h1>
-      <p style={estilos.subtitulo}>
-        Cadastro, edição e exclusão de produtos.
-      </p>
-    </div>
-
-    <div style={estilos.cardInfo}>
-      <div style={estilos.numeroInfo}>{produtos.length}</div>
-      <div style={estilos.legendaInfo}>
-        Total de produtos cadastrados
-      </div>
-    </div>
-
-    <div style={estilos.card}>
-      <div style={estilos.cardHeader}>
-        Cadastrar produto
-      </div>
-
-      <div style={estilos.cardBody}>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns:
-              '100px 1fr 1fr 120px auto',
-            gap: '10px',
-          }}
-        >
-          <input
-            type="number"
-            placeholder="ID"
-            value={novoProdutoId}
-            onChange={(e) =>
-              setNovoProdutoId(e.target.value)
-            }
-            style={estilos.input}
-          />
-
-          <input
-            type="text"
-            placeholder="Nome"
-            value={novoProdutoNome}
-            onChange={(e) =>
-              setNovoProdutoNome(e.target.value)
-            }
-            style={estilos.input}
-          />
-
-          <input
-            type="text"
-            placeholder="Categoria"
-            value={novaCategoria}
-            onChange={(e) =>
-              setNovaCategoria(e.target.value)
-            }
-            style={estilos.input}
-          />
-
-          <input
-            type="number"
-            placeholder="Preço"
-            value={novoPreco}
-            onChange={(e) =>
-              setNovoPreco(e.target.value)
-            }
-            style={estilos.input}
-          />
-
-          <button
-            style={estilos.botaoPrimario}
-            onClick={handleSalvarProduto}
-          >
-            Salvar
-          </button>
+          </article>
         </div>
-      </div>
+      )}
     </div>
-
-    <div style={estilos.card}>
-      <div style={estilos.cardHeader}>
-        Lista de produtos
-      </div>
-
-      <div style={estilos.tabelaWrapper}>
-        <table style={estilos.tabela}>
-          <thead>
-            <tr>
-              <th style={estilos.th}>ID</th>
-              <th style={estilos.th}>Nome</th>
-              <th style={estilos.th}>Categoria</th>
-              <th style={estilos.th}>Preço</th>
-              <th style={estilos.th}>Ações</th>
-            </tr>
-          </thead>
-
-          <tbody>
-            {produtos.length === 0 ? (
-              <tr>
-                <td colSpan={5} style={estilos.vazio}>
-                  Nenhum produto encontrado.
-                </td>
-              </tr>
-            ) : (
-              produtos.map((produto) => (
-                <tr key={produto.id}>
-                  <td style={estilos.td}>{produto.id}</td>
-
-                  <td style={estilos.td}>
-                    {editandoProdutoId === produto.id ? (
-                      <input
-                        value={produtoEditado.nome}
-                        onChange={(e) =>
-                          setProdutoEditado({
-                            ...produtoEditado,
-                            nome: e.target.value,
-                          })
-                        }
-                        style={estilos.inputEdicao}
-                      />
-                    ) : (
-                      produto.nome
-                    )}
-                  </td>
-
-                  <td style={estilos.td}>
-                    {editandoProdutoId === produto.id ? (
-                      <input
-                        value={produtoEditado.categoria}
-                        onChange={(e) =>
-                          setProdutoEditado({
-                            ...produtoEditado,
-                            categoria: e.target.value,
-                          })
-                        }
-                        style={estilos.inputEdicao}
-                      />
-                    ) : (
-                      produto.categoria
-                    )}
-                  </td>
-
-                  <td style={estilos.td}>
-                    {editandoProdutoId === produto.id ? (
-                      <input
-                        type="number"
-                        value={produtoEditado.preco}
-                        onChange={(e) =>
-                          setProdutoEditado({
-                            ...produtoEditado,
-                            preco: e.target.value,
-                          })
-                        }
-                        style={estilos.inputEdicao}
-                      />
-                    ) : (
-                      `R$ ${produto.preco}`
-                    )}
-                  </td>
-
-                  <td style={estilos.td}>
-                    <div style={estilos.acoes}>
-                      {editandoProdutoId === produto.id ? (
-                        <>
-                          <button
-                            style={estilos.botaoPrimario}
-                            onClick={() =>
-                              handleEditarProduto(
-                                produto.id
-                              )
-                            }
-                          >
-                            Salvar
-                          </button>
-
-                          <button
-                            style={estilos.botaoSecundario}
-                            onClick={
-                              cancelarEdicaoProduto
-                            }
-                          >
-                            Cancelar
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            style={estilos.botaoSecundario}
-                            onClick={() =>
-                              iniciarEdicaoProduto(
-                                produto
-                              )
-                            }
-                          >
-                            Editar
-                          </button>
-
-                          <button
-                            style={estilos.botaoPerigo}
-                            onClick={() =>
-                              handleDeletarProduto(
-                                produto.id
-                              )
-                            }
-                          >
-                            Deletar
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </>
-)}
-      </main>
-    </div>
-  );
+  )
 }
 
-
-export default App;
+export default App

@@ -5,61 +5,440 @@ import MysqlErrorHandle from './mysql_error_handle.js';
 import { type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
 
 const app = express();
+const PORT = 8000;
 
 app.use(cors());
 app.use(express.json());
 
-interface IPessoa extends RowDataPacket {
-  id: number;
-  nome: string;
-}
+const categoriasPermitidas = ['mangas', 'super-herois', 'hqs', 'romance'] as const;
 
-interface IProduto extends RowDataPacket {
+type Categoria = (typeof categoriasPermitidas)[number];
+
+interface IManga extends RowDataPacket {
   id: number;
-  nome: string;
-  categoria: string;
-  preco: number;
+  titulo: string;
+  autor: string;
+  categoria: Categoria;
+  preco: string | number;
+  estoque: number;
+  imagem_url: string;
+  descricao: string;
+  destaque: number | boolean;
   data_criacao: Date;
   data_modificacao: Date | null;
 }
 
-// ==================== ROTAS PESSOA ====================
+interface IResumoCategoria extends RowDataPacket {
+  categoria: Categoria;
+  total: number;
+  estoque: number;
+  preco_medio: string | number | null;
+}
 
-// GET /pessoas
-app.get('/pessoas', async (req, res) => {
+interface ITotal extends RowDataPacket {
+  total: number;
+}
+
+interface MangaInput {
+  titulo: string;
+  autor: string;
+  categoria: Categoria;
+  preco: number;
+  estoque: number;
+  imagem_url: string;
+  descricao: string;
+  destaque: boolean;
+}
+
+const mangasIniciais: MangaInput[] = [
+  {
+    titulo: 'Naruto Vol. 1',
+    autor: 'Masashi Kishimoto',
+    categoria: 'mangas',
+    preco: 34.9,
+    estoque: 18,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781569319000-L.jpg',
+    descricao: 'O inicio da jornada ninja de Naruto Uzumaki.',
+    destaque: true,
+  },
+  {
+    titulo: 'One Piece Vol. 1',
+    autor: 'Eiichiro Oda',
+    categoria: 'mangas',
+    preco: 39.9,
+    estoque: 15,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781569319017-L.jpg',
+    descricao: 'Luffy parte em busca do maior tesouro dos mares.',
+    destaque: true,
+  },
+  {
+    titulo: 'Demon Slayer Vol. 1',
+    autor: 'Koyoharu Gotouge',
+    categoria: 'mangas',
+    preco: 42.9,
+    estoque: 12,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781974700523-L.jpg',
+    descricao: 'Tanjiro encara demonios para salvar sua irma.',
+    destaque: true,
+  },
+  {
+    titulo: 'Chainsaw Man Vol. 1',
+    autor: 'Tatsuki Fujimoto',
+    categoria: 'mangas',
+    preco: 44.9,
+    estoque: 10,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781974709939-L.jpg',
+    descricao: 'Acao brutal, humor estranho e um anti-heroi memoravel.',
+    destaque: false,
+  },
+  {
+    titulo: 'Jujutsu Kaisen Vol. 1',
+    autor: 'Gege Akutami',
+    categoria: 'mangas',
+    preco: 41.9,
+    estoque: 14,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781974710027-L.jpg',
+    descricao: 'Maldicoes, escolas ocultas e combates sobrenaturais.',
+    destaque: false,
+  },
+  {
+    titulo: 'Batman: Ano Um',
+    autor: 'Frank Miller',
+    categoria: 'super-herois',
+    preco: 64.9,
+    estoque: 8,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781401207526-L.jpg',
+    descricao: 'Uma das origens definitivas do Cavaleiro das Trevas.',
+    destaque: true,
+  },
+  {
+    titulo: 'Ms. Marvel Vol. 1',
+    autor: 'G. Willow Wilson',
+    categoria: 'super-herois',
+    preco: 59.9,
+    estoque: 7,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9780785190219-L.jpg',
+    descricao: 'Kamala Khan descobre seus poderes e sua propria voz.',
+    destaque: false,
+  },
+  {
+    titulo: 'Watchmen',
+    autor: 'Alan Moore',
+    categoria: 'hqs',
+    preco: 89.9,
+    estoque: 6,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9780930289232-L.jpg',
+    descricao: 'Uma HQ adulta sobre poder, vigilancia e moralidade.',
+    destaque: true,
+  },
+  {
+    titulo: 'Heartstopper Vol. 1',
+    autor: 'Alice Oseman',
+    categoria: 'romance',
+    preco: 49.9,
+    estoque: 11,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781338617436-L.jpg',
+    descricao: 'Romance delicado sobre amizade, afeto e descoberta.',
+    destaque: true,
+  },
+  {
+    titulo: 'A Silent Voice Vol. 1',
+    autor: 'Yoshitoki Oima',
+    categoria: 'romance',
+    preco: 43.9,
+    estoque: 9,
+    imagem_url: 'https://covers.openlibrary.org/b/isbn/9781632360564-L.jpg',
+    descricao: 'Uma historia sensivel sobre culpa, reparacao e empatia.',
+    destaque: false,
+  },
+];
+
+function categoriaExiste(categoria: string): categoria is Categoria {
+  return categoriasPermitidas.includes(categoria as Categoria);
+}
+
+function texto(valor: unknown): string {
+  return typeof valor === 'string' ? valor.trim() : '';
+}
+
+function numero(valor: unknown): number {
+  if (typeof valor === 'number') {
+    return valor;
+  }
+
+  if (typeof valor === 'string' && valor.trim() !== '') {
+    return Number(valor);
+  }
+
+  return Number.NaN;
+}
+
+function booleano(valor: unknown): boolean {
+  if (typeof valor === 'boolean') {
+    return valor;
+  }
+
+  if (typeof valor === 'number') {
+    return valor === 1;
+  }
+
+  if (typeof valor === 'string') {
+    return ['true', '1', 'sim', 'on'].includes(valor.toLowerCase());
+  }
+
+  return false;
+}
+
+function serializarManga(manga: IManga) {
+  return {
+    ...manga,
+    preco: Number(manga.preco),
+    destaque: Boolean(manga.destaque),
+  };
+}
+
+function validarManga(body: Record<string, unknown>, parcial = false) {
+  const dados: Partial<MangaInput> = {};
+  const erros: string[] = [];
+
+  if (!parcial || body.titulo !== undefined) {
+    const titulo = texto(body.titulo);
+    if (!titulo) {
+      erros.push('Titulo e obrigatorio.');
+    } else {
+      dados.titulo = titulo;
+    }
+  }
+
+  if (!parcial || body.autor !== undefined) {
+    const autor = texto(body.autor);
+    if (!autor) {
+      erros.push('Autor e obrigatorio.');
+    } else {
+      dados.autor = autor;
+    }
+  }
+
+  if (!parcial || body.categoria !== undefined) {
+    const categoria = texto(body.categoria);
+    if (!categoriaExiste(categoria)) {
+      erros.push('Categoria invalida.');
+    } else {
+      dados.categoria = categoria;
+    }
+  }
+
+  if (!parcial || body.preco !== undefined) {
+    const preco = numero(body.preco);
+    if (Number.isNaN(preco) || preco <= 0) {
+      erros.push('Preco deve ser maior que zero.');
+    } else {
+      dados.preco = preco;
+    }
+  }
+
+  if (!parcial || body.estoque !== undefined) {
+    const estoque = numero(body.estoque);
+    if (!Number.isInteger(estoque) || estoque < 0) {
+      erros.push('Estoque deve ser um numero inteiro maior ou igual a zero.');
+    } else {
+      dados.estoque = estoque;
+    }
+  }
+
+  if (!parcial || body.imagem_url !== undefined) {
+    dados.imagem_url = texto(body.imagem_url);
+  }
+
+  if (!parcial || body.descricao !== undefined) {
+    dados.descricao = texto(body.descricao);
+  }
+
+  if (!parcial || body.destaque !== undefined) {
+    dados.destaque = booleano(body.destaque);
+  }
+
+  if (parcial && Object.keys(dados).length === 0) {
+    erros.push('Informe ao menos um campo para atualizar.');
+  }
+
+  return { dados, erros };
+}
+
+async function prepararBanco() {
+  await connection.execute(`
+    CREATE TABLE IF NOT EXISTS manga (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      titulo VARCHAR(180) NOT NULL,
+      autor VARCHAR(120) NOT NULL,
+      categoria VARCHAR(40) NOT NULL,
+      preco DECIMAL(10,2) NOT NULL,
+      estoque INT NOT NULL DEFAULT 0,
+      imagem_url TEXT,
+      descricao TEXT,
+      destaque BOOLEAN NOT NULL DEFAULT false,
+      data_criacao DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      data_modificacao DATETIME NULL
+    )
+  `);
+
+  const [linhas] = await connection.execute<ITotal[]>(
+    'SELECT COUNT(*) AS total FROM manga'
+  );
+
+  if (linhas[0]?.total !== 0) {
+    return;
+  }
+
+  for (const manga of mangasIniciais) {
+    await connection.execute<ResultSetHeader>(
+      `INSERT INTO manga
+        (titulo, autor, categoria, preco, estoque, imagem_url, descricao, destaque)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        manga.titulo,
+        manga.autor,
+        manga.categoria,
+        manga.preco,
+        manga.estoque,
+        manga.imagem_url,
+        manga.descricao,
+        manga.destaque,
+      ]
+    );
+  }
+}
+
+app.get('/health', (_req, res) => {
+  return res.status(200).json({ mensagem: 'API da Manga Store online.' });
+});
+
+app.get('/categorias', async (_req, res) => {
   try {
-    const [dados] = await connection.execute<IPessoa[]>('SELECT * FROM pessoa');
-    return res.status(200).json(dados);
+    const [dados] = await connection.execute<IResumoCategoria[]>(
+      `SELECT
+        categoria,
+        COUNT(*) AS total,
+        COALESCE(SUM(estoque), 0) AS estoque,
+        AVG(preco) AS preco_medio
+       FROM manga
+       GROUP BY categoria
+       ORDER BY categoria`
+    );
+
+    return res.status(200).json(
+      dados.map((item) => ({
+        categoria: item.categoria,
+        total: Number(item.total),
+        estoque: Number(item.estoque),
+        preco_medio: Number(item.preco_medio ?? 0),
+      }))
+    );
   } catch (err) {
     const mysqlErrorHandle = new MysqlErrorHandle(err, res);
     return mysqlErrorHandle.validar();
   }
 });
 
-// POST /pessoas
-app.post('/pessoas', async (req, res) => {
-  const { id, nome } = req.body;
+app.get('/mangas', async (req, res) => {
+  const categoria = texto(req.query.categoria);
+  const busca = texto(req.query.busca);
+  const destaque = texto(req.query.destaque);
+  const filtros: string[] = [];
+  const parametros: Array<string | number | boolean> = [];
 
-  if (!id || !nome) {
-    return res.status(400).json({
-      mensagem: 'Campos id e nome são obrigatórios!',
-    });
+  if (categoria) {
+    if (!categoriaExiste(categoria)) {
+      return res.status(400).json({ mensagem: 'Categoria invalida.' });
+    }
+
+    filtros.push('categoria = ?');
+    parametros.push(categoria);
+  }
+
+  if (busca) {
+    filtros.push('(titulo LIKE ? OR autor LIKE ? OR descricao LIKE ?)');
+    parametros.push(`%${busca}%`, `%${busca}%`, `%${busca}%`);
+  }
+
+  if (destaque === 'true') {
+    filtros.push('destaque = ?');
+    parametros.push(true);
+  }
+
+  const where = filtros.length > 0 ? `WHERE ${filtros.join(' AND ')}` : '';
+
+  try {
+    const [dados] = await connection.execute<IManga[]>(
+      `SELECT * FROM manga ${where} ORDER BY destaque DESC, titulo ASC`,
+      parametros
+    );
+
+    return res.status(200).json(dados.map(serializarManga));
+  } catch (err) {
+    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
+    return mysqlErrorHandle.validar();
+  }
+});
+
+app.get('/mangas/:id', async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ mensagem: 'ID invalido.' });
   }
 
   try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      'INSERT INTO pessoa (id, nome) VALUES (?, ?)',
-      [id, nome]
+    const [dados] = await connection.execute<IManga[]>(
+      'SELECT * FROM manga WHERE id = ?',
+      [id]
     );
 
-    if (result.affectedRows === 0) {
-      return res.status(500).json({
-        mensagem: 'Erro ao cadastrar pessoa!',
-      });
+    if (dados.length === 0) {
+      return res.status(404).json({ mensagem: 'Manga nao encontrado.' });
     }
+
+    return res.status(200).json(serializarManga(dados[0] as IManga));
+  } catch (err) {
+    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
+    return mysqlErrorHandle.validar();
+  }
+});
+
+app.post('/mangas', async (req, res) => {
+  const { dados, erros } = validarManga(req.body as Record<string, unknown>);
+
+  if (erros.length > 0) {
+    return res.status(400).json({ mensagem: erros.join(' ') });
+  }
+
+  const manga = dados as MangaInput;
+
+  try {
+    const [result] = await connection.execute<ResultSetHeader>(
+      `INSERT INTO manga
+        (titulo, autor, categoria, preco, estoque, imagem_url, descricao, destaque)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        manga.titulo,
+        manga.autor,
+        manga.categoria,
+        manga.preco,
+        manga.estoque,
+        manga.imagem_url,
+        manga.descricao,
+        manga.destaque,
+      ]
+    );
+
+    const [criado] = await connection.execute<IManga[]>(
+      'SELECT * FROM manga WHERE id = ?',
+      [result.insertId]
+    );
 
     return res.status(201).json({
-      mensagem: 'Pessoa cadastrada com sucesso!',
+      mensagem: 'Manga cadastrado com sucesso!',
+      manga: serializarManga(criado[0] as IManga),
     });
   } catch (err) {
     const mysqlErrorHandle = new MysqlErrorHandle(err, res);
@@ -67,160 +446,87 @@ app.post('/pessoas', async (req, res) => {
   }
 });
 
-// PATCH /pessoa/:id
-app.patch('/pessoa/:id', async (req, res) => {
-  const { id } = req.params;
-  const { nome } = req.body;
+app.patch('/mangas/:id', async (req, res) => {
+  const id = Number(req.params.id);
 
-  if (!nome) {
-    return res.status(400).json({
-      mensagem: 'O campo nome é obrigatório!',
-    });
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ mensagem: 'ID invalido.' });
   }
 
-  try {
-    const [rows] = await connection.execute<IPessoa[]>(
-      'SELECT * FROM pessoa WHERE id = ?',
-      [id]
-    );
+  const { dados, erros } = validarManga(
+    req.body as Record<string, unknown>,
+    true
+  );
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        mensagem: 'Pessoa não encontrada!',
-      });
-    }
-
-    const [result] = await connection.execute<ResultSetHeader>(
-      'UPDATE pessoa SET nome = ? WHERE id = ?',
-      [nome, id]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(500).json({
-        mensagem: 'Erro ao atualizar pessoa!',
-      });
-    }
-
-    return res.status(200).json({
-      mensagem: 'Pessoa atualizada com sucesso!',
-    });
-  } catch (err) {
-    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
-    return mysqlErrorHandle.validar();
-  }
-});
-
-// DELETE /pessoa/:id
-app.delete('/pessoa/:id', async (req, res) => {
-  const { id } = req.params;
-
-  try {
-    const [result] = await connection.execute<ResultSetHeader>(
-      'DELETE FROM pessoa WHERE id = ?',
-      [id]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({
-        mensagem: 'Pessoa não encontrada!',
-      });
-    }
-
-    return res.status(200).json({
-      mensagem: 'Pessoa deletada com sucesso!',
-    });
-  } catch (err) {
-    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
-    return mysqlErrorHandle.validar();
-  }
-});
-
-// ==================== ROTAS PRODUTO ====================
-
-// GET /produtos
-app.get('/produtos', async (req, res) => {
-  try {
-    const [dados] = await connection.execute<IProduto[]>('SELECT * FROM produto');
-    return res.status(200).json(dados);
-  } catch (err) {
-    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
-    return mysqlErrorHandle.validar();
-  }
-});
-
-// POST /produtos
-app.post('/produtos', async (req, res) => {
-  const { id, nome, categoria, preco } = req.body;
-
-  if (!id || !nome || !categoria || preco === undefined) {
-    return res.status(400).json({
-      mensagem: 'Campos id, nome, categoria e preco são obrigatórios!',
-    });
+  if (erros.length > 0) {
+    return res.status(400).json({ mensagem: erros.join(' ') });
   }
 
-  const dataCriacao = new Date();
-  const dataModificacao = null;
+  const atualizacoes: string[] = [];
+  const valores: Array<string | number | boolean> = [];
+
+  if (dados.titulo !== undefined) {
+    atualizacoes.push('titulo = ?');
+    valores.push(dados.titulo);
+  }
+
+  if (dados.autor !== undefined) {
+    atualizacoes.push('autor = ?');
+    valores.push(dados.autor);
+  }
+
+  if (dados.categoria !== undefined) {
+    atualizacoes.push('categoria = ?');
+    valores.push(dados.categoria);
+  }
+
+  if (dados.preco !== undefined) {
+    atualizacoes.push('preco = ?');
+    valores.push(dados.preco);
+  }
+
+  if (dados.estoque !== undefined) {
+    atualizacoes.push('estoque = ?');
+    valores.push(dados.estoque);
+  }
+
+  if (dados.imagem_url !== undefined) {
+    atualizacoes.push('imagem_url = ?');
+    valores.push(dados.imagem_url);
+  }
+
+  if (dados.descricao !== undefined) {
+    atualizacoes.push('descricao = ?');
+    valores.push(dados.descricao);
+  }
+
+  if (dados.destaque !== undefined) {
+    atualizacoes.push('destaque = ?');
+    valores.push(dados.destaque);
+  }
+
+  valores.push(id);
 
   try {
     const [result] = await connection.execute<ResultSetHeader>(
-      'INSERT INTO produto (id, nome, categoria, preco, data_criacao, data_modificacao) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, nome, categoria, preco, dataCriacao, dataModificacao]
-    );
-
-    if (result.affectedRows === 0) {
-      return res.status(500).json({
-        mensagem: 'Erro ao cadastrar produto!',
-      });
-    }
-
-    return res.status(201).json({
-      mensagem: 'Produto cadastrado com sucesso!',
-    });
-  } catch (err) {
-    const mysqlErrorHandle = new MysqlErrorHandle(err, res);
-    return mysqlErrorHandle.validar();
-  }
-});
-
-// PATCH /produto/:id
-app.patch('/produto/:id', async (req, res) => {
-  const { id } = req.params;
-  const { nome, categoria, preco } = req.body;
-
-  try {
-    const [rows] = await connection.execute<IProduto[]>(
-      'SELECT * FROM produto WHERE id = ?',
-      [id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({
-        mensagem: 'Produto não encontrado!',
-      });
-    }
-
-    const produtoAtual = rows[0] as IProduto;
-
-    const novoNome = nome ?? produtoAtual.nome;
-    const novaCategoria = categoria ?? produtoAtual.categoria;
-    const novoPreco = preco ?? produtoAtual.preco;
-    const dataModificacao = new Date();
-
-    const [result] = await connection.execute<ResultSetHeader>(
-      `UPDATE produto
-       SET nome = ?, categoria = ?, preco = ?, data_modificacao = ?
+      `UPDATE manga
+       SET ${atualizacoes.join(', ')}, data_modificacao = NOW()
        WHERE id = ?`,
-      [novoNome, novaCategoria, novoPreco, dataModificacao, id]
+      valores
     );
 
     if (result.affectedRows === 0) {
-      return res.status(500).json({
-        mensagem: 'Erro ao atualizar produto!',
-      });
+      return res.status(404).json({ mensagem: 'Manga nao encontrado.' });
     }
 
+    const [atualizado] = await connection.execute<IManga[]>(
+      'SELECT * FROM manga WHERE id = ?',
+      [id]
+    );
+
     return res.status(200).json({
-      mensagem: 'Produto atualizado com sucesso!',
+      mensagem: 'Manga atualizado com sucesso!',
+      manga: serializarManga(atualizado[0] as IManga),
     });
   } catch (err) {
     const mysqlErrorHandle = new MysqlErrorHandle(err, res);
@@ -228,31 +534,36 @@ app.patch('/produto/:id', async (req, res) => {
   }
 });
 
-// DELETE /produto/:id
-app.delete('/produto/:id', async (req, res) => {
-  const { id } = req.params;
+app.delete('/mangas/:id', async (req, res) => {
+  const id = Number(req.params.id);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ mensagem: 'ID invalido.' });
+  }
 
   try {
     const [result] = await connection.execute<ResultSetHeader>(
-      'DELETE FROM produto WHERE id = ?',
+      'DELETE FROM manga WHERE id = ?',
       [id]
     );
 
     if (result.affectedRows === 0) {
-      return res.status(404).json({
-        mensagem: 'Produto não encontrado!',
-      });
+      return res.status(404).json({ mensagem: 'Manga nao encontrado.' });
     }
 
-    return res.status(200).json({
-      mensagem: 'Produto deletado com sucesso!',
-    });
+    return res.status(200).json({ mensagem: 'Manga deletado com sucesso!' });
   } catch (err) {
     const mysqlErrorHandle = new MysqlErrorHandle(err, res);
     return mysqlErrorHandle.validar();
   }
 });
 
-app.listen(8000, () => {
-  console.log('Servidor iniciado na porta 8000');
-});
+prepararBanco()
+  .catch((erro: unknown) => {
+    console.error('Nao foi possivel preparar a tabela manga.', erro);
+  })
+  .finally(() => {
+    app.listen(PORT, () => {
+      console.log(`Servidor iniciado na porta ${PORT}`);
+    });
+  });
